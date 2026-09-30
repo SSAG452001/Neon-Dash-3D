@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Neon Dash 3D</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#05000f;font-family:"Trebuchet MS",system-ui,sans-serif;color:#fff;touch-action:none;user-select:none}
+canvas{display:block}
+#hud{position:fixed;inset:0;pointer-events:none;display:none}
+#hud .t{position:absolute;top:14px;left:18px;font-size:34px;font-weight:800;text-shadow:0 0 14px #0ff}
+#hud .r{position:absolute;top:14px;right:18px;text-align:right;font-size:18px;line-height:1.5;text-shadow:0 0 8px #000}
+#hud .b{position:absolute;bottom:16px;left:18px;font-size:16px;display:flex;gap:10px;flex-wrap:wrap}
+.pill{padding:5px 12px;border-radius:20px;background:#0008;border:1px solid #fff5}
+#lives{font-size:26px;color:#ff3b6b;text-shadow:0 0 10px #f36}
+#ov{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(circle,#1a0038cc,#000000e6);text-align:center;padding:20px;z-index:5}
+#ov h1{font-size:clamp(40px,9vw,92px);letter-spacing:.06em;font-style:italic;background:linear-gradient(90deg,#0ff,#f0f,#ff0);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 0 18px #f0f8)}
+#ov p{margin:12px 0;max-width:560px;line-height:1.6;color:#cfe}
+#ov button{margin-top:18px;padding:14px 46px;font-size:22px;font-weight:800;border:0;border-radius:40px;cursor:pointer;color:#000;background:linear-gradient(90deg,#0ff,#7f7);box-shadow:0 0 30px #0ffa;transition:transform .15s}
+#ov button:hover{transform:scale(1.07)}
+#ov button:focus-visible{outline:3px solid #fff}
+.keys{font-size:14px;color:#9ab}
+@media(prefers-reduced-motion:reduce){#ov button{transition:none}}
+</style>
+</head>
+<body>
+<div id="hud">
+  <div class="t" id="score">0</div>
+  <div class="r"><div id="lives"></div><div>Level <b id="lvl">1</b></div><div>Coins <b id="coins">0</b></div><div>Best <b id="best">0</b></div></div>
+  <div class="b" id="pw"></div>
+</div>
+<div id="ov">
+  <h1 id="ttl">NEON DASH 3D</h1>
+  <p id="msg">Run down the neon highway. Dodge red blocks, jump orange barriers, slide under bars, grab coins and power-ups. You have 3 lives.</p>
+  <p class="keys">← → / A D change lane · ↑ / W / Space jump · ↓ / S slide · P pause · M mute<br>Touch: swipe left, right, up, down</p>
+  <button id="go">Play</button>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(()=>{
+if(typeof THREE==='undefined'){document.getElementById('msg').textContent='Could not load three.js. Check your internet connection and reload.';return}
+const $=id=>document.getElementById(id);
+const rnd=(a,b)=>a+Math.random()*(b-a), ri=n=>Math.floor(Math.random()*n);
+// ---------- audio ----------
+let AC,muted=false;
+function snd(f,d=.12,type='square',v=.05,sl=0){if(muted)return;try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();const o=AC.createOscillator(),g=AC.createGain(),t=AC.currentTime;o.type=type;o.frequency.setValueAtTime(f,t);if(sl)o.frequency.exponentialRampToValueAtTime(Math.max(30,f+sl),t+d);g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.0001,t+d);o.connect(g);g.connect(AC.destination);o.start();o.stop(t+d)}catch(e){}}
+// ---------- renderer ----------
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0a0020);
+scene.fog=new THREE.Fog(0x0a0020,30,150);
+const cam=new THREE.PerspectiveCamera(65,innerWidth/innerHeight,.1,400);
+cam.position.set(0,4.6,8);
+scene.add(new THREE.AmbientLight(0x8888ff,.7));
+const sun=new THREE.DirectionalLight(0xffffff,.8);sun.position.set(5,20,10);scene.add(sun);
+const pl=new THREE.PointLight(0x00ffff,1.2,18);scene.add(pl);
+addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+const M=(c,e=.6)=>new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:e,roughness:.4});
+const edgeMat=new THREE.LineBasicMaterial({color:0xff00ff});
+const laneMat=new THREE.MeshBasicMaterial({color:0x00ffff});
+const bMat=new THREE.MeshStandardMaterial({color:0x100826,roughness:.8});
+// ---------- sky ----------
+const sg=new THREE.BufferGeometry(),sp=[];
+for(let i=0;i<700;i++)sp.push(rnd(-250,250),rnd(20,160),rnd(-250,-30));
+sg.setAttribute('position',new THREE.Float32BufferAttribute(sp,3));
+const stars=new THREE.Points(sg,new THREE.PointsMaterial({color:0xffffff,size:1.4,fog:false}));scene.add(stars);
+const moon=new THREE.Mesh(new THREE.SphereGeometry(16,32,32),new THREE.MeshBasicMaterial({color:0xff66cc,fog:false}));
+moon.position.set(0,30,-200);scene.add(moon);
+// ---------- world tiles ----------
+const TL=20,TN=12,tiles=[];
+const boxG=new THREE.BoxGeometry(1,1,1),edgeG=new THREE.EdgesGeometry(boxG);
+for(let i=0;i<TN;i++){
+  const g=new THREE.Group();
+  const fl=new THREE.Mesh(new THREE.BoxGeometry(11,.4,TL),new THREE.MeshStandardMaterial({color:0x140a2a,roughness:.5,metalness:.4}));fl.position.y=-.2;g.add(fl);
+  [-1.5,1.5].forEach(x=>{const l=new THREE.Mesh(new THREE.BoxGeometry(.12,.05,TL),laneMat);l.position.set(x,.03,0);g.add(l)});
+  [-5.4,5.4].forEach(x=>{const l=new THREE.Mesh(new THREE.BoxGeometry(.3,.5,TL),laneMat);l.position.set(x,.25,0);g.add(l)});
+  g.userData.b=[];
+  for(let s=-1;s<=1;s+=2)for(let k=0;k<4;k++){
+    const b=new THREE.Mesh(boxG,bMat);b.add(new THREE.LineSegments(edgeG,edgeMat));
+    b.userData={s,k};g.add(b);g.userData.b.push(b);
+  }
+  g.position.z=10-i*TL;scene.add(g);tiles.push(g);
+  rebuild(g);
+}
+function rebuild(g){g.userData.b.forEach(b=>{const w=rnd(3,6),h=rnd(4,32),d=rnd(3,4.2);b.scale.set(w,h,d);b.position.set(b.userData.s*(8.5+w/2+rnd(0,8)),h/2,-7.5+b.userData.k*5)})}
+// ---------- player ----------
+const lanes=[-3,0,3];
+const hero=new THREE.Group();scene.add(hero);
+const body=new THREE.Mesh(new THREE.BoxGeometry(.9,1,.5),M(0x00e5ff,.5));body.position.y=1.35;hero.add(body);
+const head=new THREE.Mesh(new THREE.SphereGeometry(.34,16,16),M(0xffffff,.4));head.position.y=2.1;hero.add(head);
+const visor=new THREE.Mesh(new THREE.BoxGeometry(.5,.14,.2),M(0xff00ff,1));visor.position.set(0,2.12,-.28);hero.add(visor);
+function limb(x,y,w,h,c){const p=new THREE.Group();p.position.set(x,y,0);const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,w),M(c,.4));m.position.y=-h/2;p.add(m);hero.add(p);return p}
+const legL=limb(-.22,.85,.3,.85,0x7a00ff),legR=limb(.22,.85,.3,.85,0x7a00ff),armL=limb(-.6,1.8,.22,.8,0x00e5ff),armR=limb(.6,1.8,.22,.8,0x00e5ff);
+const shieldM=new THREE.Mesh(new THREE.SphereGeometry(1.7,20,20),new THREE.MeshBasicMaterial({color:0x44aaff,transparent:true,opacity:.28,wireframe:true}));shieldM.position.y=1.2;hero.add(shieldM);
+// ---------- shared geos ----------
+const coinG=new THREE.CylinderGeometry(.45,.45,.12,20),coinM=M(0xffd400,.8);
+const puG=new THREE.OctahedronGeometry(.6);
+const puDef={s:M(0x44aaff,1),m:M(0xff44ff,1),x:M(0x44ff66,1),h:M(0xff3355,1)};
+// ---------- state ----------
+let obs=[],items=[],parts=[];
+let state='menu',speed=20,dist=0,sc=0,coins=0,lane=1,px=0,py=0,vy=0,slideT=0,lives=3,invul=0,shake=0,runT=0,nextRow=20,level=1,hue=.83,hueT=.83;
+let pw={s:false,m:0,x:0},best=0;
+try{best=+localStorage.getItem('neondash3d_best')||0}catch(e){}
+$('best').textContent=best;
+function clearAll(){[...obs,...items].forEach(o=>scene.remove(o.m));obs=[];items=[]}
+function reset(){clearAll();speed=20;dist=0;sc=0;coins=0;lane=1;px=0;py=0;vy=0;slideT=0;lives=3;invul=0;shake=0;nextRow=30;level=1;hueT=.83;pw={s:false,m:0,x:0};hud()}
+// ---------- spawning ----------
+function mkObs(t,l){
+  const g=new THREE.Group();
+  const add=(w,h,d,c,x,y)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),M(c,.55));m.position.set(x,y,0);g.add(m)};
+  if(t===0)add(2.4,2.6,2,0xff2255,0,1.3);
+  if(t===1){add(2.6,.9,.8,0xffa000,0,.45);add(2.6,.15,.85,0xffffff,0,.95)}
+  if(t===2){add(2.9,.55,.8,0x9b30ff,0,2.0);add(.3,2.3,.3,0x9b30ff,-1.3,1.15);add(.3,2.3,.3,0x9b30ff,1.3,1.15)}
+  g.position.set(lanes[l],0,-150);scene.add(g);obs.push({m:g,t,l});
+}
+function mkItem(k,l,z,y=1.2){
+  let m;
+  if(k==='c'){m=new THREE.Mesh(coinG,coinM);m.rotation.x=Math.PI/2}
+  else m=new THREE.Mesh(puG,puDef[k]);
+  m.position.set(lanes[l],y,z);scene.add(m);items.push({m,k});
+}
+function spawnRow(){
+  const f=ri(3),types=[];
+  for(let l=0;l<3;l++)if(l!==f&&Math.random()<.65){const t=ri(3);mkObs(t,l);types[l]=t}
+  const n=5;for(let i=0;i<n;i++){const y=1.2+(Math.random()<.0?0:0);mkItem('c',f,-150-i*2.6,y)}
+  if(Math.random()<.35){const l=ri(3);if(types[l]===undefined)for(let i=0;i<4;i++)mkItem('c',l,-160-i*2.4,1.3+Math.sin(i/3*Math.PI)*1.6)}
+  if(Math.random()<.14){const k=['s','m','x','h'][ri(4)];mkItem(k,f,-170,1.4)}
+  nextRow=rnd(16,26)+speed*.25;
+}
+// ---------- particles ----------
+const pG=new THREE.BoxGeometry(.18,.18,.18);
+function burst(x,y,z,c,n=14){for(let i=0;i<n;i++){const m=new THREE.Mesh(pG,new THREE.MeshBasicMaterial({color:c}));m.position.set(x,y,z);scene.add(m);parts.push({m,v:new THREE.Vector3(rnd(-6,6),rnd(1,8),rnd(-6,6)),l:rnd(.4,.9)})}}
+function updParts(dt){for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.l-=dt;p.v.y-=18*dt;p.m.position.addScaledVector(p.v,dt);p.m.scale.setScalar(Math.max(.01,p.l*1.5));if(p.l<=0){scene.remove(p.m);p.m.material.dispose();parts.splice(i,1)}}}
+// ---------- HUD ----------
+function hud(){
+  $('score').textContent=Math.floor(sc);$('coins').textContent=coins;$('lvl').textContent=level;
+  $('lives').textContent='♥'.repeat(Math.max(0,lives))+'♡'.repeat(Math.max(0,3-lives));
+  let h='<span class="pill">'+Math.round(speed*3.6)+' km/h</span>';
+  if(pw.s)h+='<span class="pill" style="border-color:#4af">Shield</span>';
+  if(pw.m>0)h+='<span class="pill" style="border-color:#f4f">Magnet '+pw.m.toFixed(1)+'s</span>';
+  if(pw.x>0)h+='<span class="pill" style="border-color:#4f6">x2 '+pw.x.toFixed(1)+'s</span>';
+  $('pw').innerHTML=h;
+}
+// ---------- game flow ----------
+function start(){reset();state='play';$('ov').style.display='none';$('hud').style.display='block';snd(440,.3,'sine',.06,440)}
+function over(){
+  state='over';burst(px,1.5,0,0xff3355,40);snd(200,.6,'sawtooth',.08,-150);
+  let nb=false;if(Math.floor(sc)>best){best=Math.floor(sc);nb=true;try{localStorage.setItem('neondash3d_best',best)}catch(e){}}
+  $('best').textContent=best;
+  $('ttl').textContent='GAME OVER';
+  $('msg').innerHTML='Score <b>'+Math.floor(sc)+'</b> · Coins <b>'+coins+'</b> · Level <b>'+level+'</b><br>'+(nb?'New personal best!':'Best: '+best);
+  $('go').textContent='Run again';$('ov').style.display='flex';
+}
+function pause(){if(state==='play'){state='pause';$('ttl').textContent='PAUSED';$('msg').textContent='Take a breath.';$('go').textContent='Resume';$('ov').style.display='flex'}
+  else if(state==='pause'){state='play';$('ov').style.display='none'}}
+$('go').onclick=()=>{if(state==='pause')pause();else start()};
+function moveL(d){if(state!=='play')return;const n=Math.max(0,Math.min(2,lane+d));if(n!==lane){lane=n;snd(520,.08,'triangle',.05)}}
+function jump(){if(state==='play'&&py<=.02){vy=16;slideT=0;snd(400,.18,'square',.04,500)}}
+function slide(){if(state!=='play')return;if(py>.02)vy=-22;else{slideT=.7;snd(200,.2,'sawtooth',.04,-80)}}
+addEventListener('keydown',e=>{
+  const k=e.key.toLowerCase();
+  if(['arrowleft','arrowright','arrowup','arrowdown',' '].includes(k))e.preventDefault();
+  if(k==='arrowleft'||k==='a')moveL(-1);
+  else if(k==='arrowright'||k==='d')moveL(1);
+  else if(k==='arrowup'||k==='w'||k===' '){if(state==='menu'||state==='over')start();else jump()}
+  else if(k==='arrowdown'||k==='s')slide();
+  else if(k==='p'||k==='escape')pause();
+  else if(k==='m')muted=!muted;
+  else if(k==='enter'&&(state==='menu'||state==='over'))start();
+});
+let tx=0,ty=0;
+addEventListener('touchstart',e=>{tx=e.touches[0].clientX;ty=e.touches[0].clientY},{passive:true});
+addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+addEventListener('touchend',e=>{const t=e.changedTouches[0],dx=t.clientX-tx,dy=t.clientY-ty;
+  if(e.target.id==='go')return;
+  if(Math.abs(dx)<25&&Math.abs(dy)<25){jump();return}
+  if(Math.abs(dx)>Math.abs(dy))moveL(dx>0?1:-1);else if(dy<0)jump();else slide()});
+// ---------- update ----------
+function scroll(dt,sp){
+  tiles.forEach(t=>{t.position.z+=sp*dt;if(t.position.z>30){t.position.z-=TL*TN;rebuild(t)}});
+  stars.rotation.y+=dt*.01;
+}
+function hit(){
+  if(invul>0)return;
+  if(pw.s){pw.s=false;invul=1;burst(px,1.5,0,0x44aaff,25);snd(300,.3,'triangle',.07,-100);return}
+  lives--;invul=1.6;shake=.6;burst(px,1.5,0,0xff3355,25);snd(150,.35,'sawtooth',.08,-80);
+  if(lives<=0)over();
+}
+function update(dt){
+  level=Math.floor(dist/700)+1;
+  const ts=Math.min(52,20+(level-1)*3.2);speed+=(ts-speed)*Math.min(1,dt);
+  dist+=speed*dt;sc+=speed*dt*.2*(pw.x>0?2:1);
+  hueT=.83+level*.13;
+  px+=(lanes[lane]-px)*Math.min(1,dt*14);
+  vy-=45*dt;py+=vy*dt;if(py<=0){py=0;vy=0}
+  if(slideT>0)slideT-=dt;
+  if(invul>0)invul-=dt;
+  if(pw.m>0)pw.m-=dt;if(pw.x>0)pw.x-=dt;
+  scroll(dt,speed);
+  nextRow-=speed*dt;if(nextRow<=0)spawnRow();
+  const ph=slideT>0?.9:2.0;
+  for(let i=obs.length-1;i>=0;i--){
+    const o=obs[i];o.m.position.z+=speed*dt;
+    const z=o.m.position.z;
+    if(Math.abs(z)<1.3&&Math.abs(o.m.position.x-px)<1.3&&state==='play'){
+      if(o.t===0||(o.t===1&&py<.9)||(o.t===2&&py+ph>1.7))hit();
+    }
+    if(z>12){scene.remove(o.m);obs.splice(i,1)}
+  }
+  for(let i=items.length-1;i>=0;i--){
+    const it=items[i],m=it.m;m.position.z+=speed*dt;
+    if(it.k==='c'){m.rotation.z+=dt*5;
+      if(pw.m>0&&m.position.z>-16&&m.position.z<3){m.position.x+=(px-m.position.x)*Math.min(1,dt*8);m.position.y+=(py+1-m.position.y)*Math.min(1,dt*8)}}
+    else{m.rotation.y+=dt*3;m.rotation.x+=dt*2}
+    if(Math.abs(m.position.z)<1.3&&Math.abs(m.position.x-px)<1.4&&Math.abs(m.position.y-(py+1))<1.8){
+      if(it.k==='c'){coins++;sc+=10*(pw.x>0?2:1);burst(m.position.x,m.position.y,m.position.z,0xffd400,8);snd(880+Math.min(coins%10,9)*40,.1,'square',.04,300)}
+      else{
+        if(it.k==='s')pw.s=true;if(it.k==='m')pw.m=8;if(it.k==='x')pw.x=10;
+        if(it.k==='h'&&lives<3)lives++;
+        burst(m.position.x,m.position.y,m.position.z,0xffffff,18);snd(600,.3,'sine',.07,600);
+      }
+      scene.remove(m);items.splice(i,1);continue;
+    }
+    if(m.position.z>12){scene.remove(m);items.splice(i,1)}
+  }
+  animHero(dt);hud();
+}
+function animHero(dt){
+  runT+=dt*(6+speed*.35);
+  const a=py>.05?0:Math.sin(runT)*.9;
+  legL.rotation.x=a;legR.rotation.x=-a;armL.rotation.x=-a;armR.rotation.x=a;
+  if(py>.05){legL.rotation.x=.6;legR.rotation.x=-.5;armL.rotation.x=armR.rotation.x=-2.4}
+  const sl=slideT>0;
+  hero.scale.y+=((sl?.5:1)-hero.scale.y)*Math.min(1,dt*20);
+  hero.rotation.x=sl?.5:0;
+  hero.rotation.z=(px-lanes[lane])*.12;
+  hero.position.set(px,py+(Math.abs(Math.sin(runT))*.08*(py>0?0:1)),0);
+  hero.visible=invul<=0||Math.floor(invul*14)%2===0;
+  shieldM.visible=pw.s;shieldM.rotation.y+=dt*2;
+  pl.position.set(px,3,2);
+}
+function theme(dt){
+  const h=hue+= (hueT-hue)*Math.min(1,dt*.8);const H=((h%1)+1)%1;
+  edgeMat.color.setHSL(H,1,.55);laneMat.color.setHSL((H+.5)%1,1,.55);
+  scene.background.setHSL(H,.7,.05);scene.fog.color.setHSL(H,.7,.05);
+  moon.material.color.setHSL((H+.1)%1,.9,.6);
+}
+// ---------- main loop ----------
+let last=performance.now();
+function loop(t){
+  requestAnimationFrame(loop);
+  const dt=Math.min(.05,(t-last)/1000);last=t;
+  theme(dt);
+  if(state==='play'||state==='over'){
+    if(state==='play')update(dt);else{scroll(dt,speed*=.97)}
+    updParts(dt);
+  }else if(state==='menu'){scroll(dt,10);animHero(dt);speed=20;}
+  // camera
+  shake=Math.max(0,shake-dt);
+  const sh=shake*.6;
+  cam.position.x+=((px*.55)-cam.position.x)*Math.min(1,dt*5);
+  cam.position.y=4.6+(state==='play'?py*.25:0)+(Math.random()-.5)*sh;
+  cam.position.x+=(Math.random()-.5)*sh*.5;
+  cam.fov+=((state==='play'?60+speed*.35:66)-cam.fov)*Math.min(1,dt*3);cam.updateProjectionMatrix();
+  cam.lookAt(px*.3,1.6,-12);
+  moon.position.x=px*.3;
+  renderer.render(scene,cam);
+}
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
